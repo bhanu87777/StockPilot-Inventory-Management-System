@@ -1,0 +1,22 @@
+# deps / build
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+
+# secrets — commit .env.example instead
+.env
+.env.*
+!.env.example
+
+# build output
+/out/
+/build
+next-env.d.ts
+
+# misc
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+.vercel
+.idea/

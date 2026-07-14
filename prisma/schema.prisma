@@ -1,0 +1,138 @@
+// StockPilot data model
+// Problem: spreadsheets don't warn you before a stockout, and dead stock
+// quietly ties up cash. Solution: a single source of truth for SKUs, an
+// append-only movement ledger that drives on-hand quantities, purchase
+// orders that receive into stock atomically, and an AI reorder advisor.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// The operator (ops / warehouse lead) who signs in.
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  password  String // bcrypt hash
+  createdAt DateTime @default(now())
+}
+
+model Supplier {
+  id             String          @id @default(cuid())
+  name           String
+  email          String
+  country        String
+  leadTimeDays   Int // typical days from order to delivery
+  products       Product[]
+  purchaseOrders PurchaseOrder[]
+}
+
+model Product {
+  id           String  @id @default(cuid())
+  sku          String  @unique
+  name         String
+  category     String
+  unitCost     Float
+  price        Float
+  quantity     Int     @default(0) // on hand — only mutated via the movement ledger
+  reorderPoint Int // alert when quantity falls to/below this
+  reorderQty   Int // default order size suggested to purchasing
+  supplierId   String
+  supplier     Supplier @relation(fields: [supplierId], references: [id])
+
+  movements StockMovement[]
+  poItems   PurchaseOrderItem[]
+
+  @@index([category])
+}
+
+enum MovementType {
+  IN // goods received
+  OUT // sales / issues
+  ADJUST // cycle count corrections, shrinkage (quantity may be negative)
+}
+
+// Append-only ledger. `balance` snapshots on-hand after the movement so the
+// history is auditable without replaying.
+model StockMovement {
+  id         String       @id @default(cuid())
+  type       MovementType
+  quantity   Int // positive for IN/OUT; ADJUST carries a signed delta
+  balance    Int
+  reason     String
+  reference  String? // e.g. order number, PO number
+  occurredAt DateTime     @default(now())
+  productId  String
+  product    Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([occurredAt])
+  @@index([productId, occurredAt])
+}
+
+enum PoStatus {
+  DRAFT
+  ORDERED
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id         String    @id @default(cuid())
+  number     String    @unique // PO-2026-0001
+  status     PoStatus  @default(DRAFT)
+  createdAt  DateTime  @default(now())
+  orderedAt  DateTime?
+  expectedAt DateTime?
+  receivedAt DateTime?
+  supplierId String
+  supplier   Supplier  @relation(fields: [supplierId], references: [id])
+  items      PurchaseOrderItem[]
+}
+
+model PurchaseOrderItem {
+  id        String        @id @default(cuid())
+  quantity  Int
+  unitCost  Float
+  poId      String
+  po        PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product       @relation(fields: [productId], references: [id])
+}
+
+enum Urgency {
+  CRITICAL // will stock out before a new order can arrive
+  SOON // stockout likely shortly after lead time
+  OK
+  DEAD // no demand — don't reorder, consider clearance
+}
+
+enum AdvisorSource {
+  AI
+  HEURISTIC
+}
+
+// One advisor run over the whole catalog.
+model AdvisorRun {
+  id          String              @id @default(cuid())
+  summary     String              @db.Text
+  source      AdvisorSource
+  createdAt   DateTime            @default(now())
+  suggestions ReorderSuggestion[]
+}
+
+model ReorderSuggestion {
+  id           String     @id @default(cuid())
+  productName  String
+  sku          String
+  urgency      Urgency
+  suggestedQty Int
+  daysOfCover  Float // at current velocity
+  rationale    String     @db.Text
+  runId        String
+  run          AdvisorRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+}

@@ -1,0 +1,137 @@
+@import "tailwindcss";
+
+/*
+  StockPilot design tokens — a committed light, industrial-precision look.
+  Chart series colors are the validated light-mode palette against --surface
+  (worst adjacent CVD ΔE 16.2, lightness band and chroma floor clean; aqua and
+  yellow sit below 3:1 so every chart ships a legend and a table view).
+*/
+:root {
+  --page: #f4f4f1;
+  --surface: #fcfcfb; /* card / chart surface (validated against) */
+  --surface-2: #f1f1ed;
+  --border: rgba(16, 24, 40, 0.09);
+  --border-strong: rgba(16, 24, 40, 0.16);
+
+  --ink: #14181f;
+  --ink-secondary: #4c5462;
+  --muted: #7c8394;
+
+  /* Brand chrome (UI accents, never data encoding) */
+  --accent: #1c5cab;
+  --accent-bright: #2a78d6;
+  --accent-wash: rgba(42, 120, 214, 0.09);
+  --accent-fg: #ffffff;
+
+  /* Categorical series — fixed order, never cycled */
+  --viz-1: #2a78d6; /* blue   */
+  --viz-2: #1baf7a; /* aqua   */
+  --viz-3: #eda100; /* yellow */
+  --viz-4: #4a3aa7; /* violet */
+  --viz-5: #e34948; /* red    */
+  --viz-6: #eb6834; /* orange */
+
+  /* Status text (WCAG-clean on the light surface; always icon + label) */
+  --good: #067d06;
+  --warning: #8f6400;
+  --critical: #c02b2b;
+
+  /* Chart chrome */
+  --grid: #e6e5df;
+  --axis: #c9c8c0;
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ink: var(--ink);
+  --color-ink-secondary: var(--ink-secondary);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-bright: var(--accent-bright);
+  --color-good: var(--good);
+  --color-warning: var(--warning);
+  --color-critical: var(--critical);
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-grotesk);
+}
+
+body {
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+.font-display {
+  font-family: var(--font-grotesk), system-ui, sans-serif;
+}
+
+/* Panel: the standard card. Crisp hairline, barely-there shadow. */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+.panel-hover {
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.panel-hover:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.07);
+}
+
+.btn-accent {
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  transition: background 140ms ease, transform 140ms ease;
+}
+.btn-accent:hover {
+  background: #17509a;
+}
+.btn-accent:active {
+  transform: translateY(1px);
+}
+
+.btn-ghost {
+  border: 1px solid var(--border-strong);
+  color: var(--ink-secondary);
+  font-weight: 500;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+.btn-ghost:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.input {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  color: var(--ink);
+  padding: 0.5rem 0.75rem;
+  width: 100%;
+  outline: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.input::placeholder {
+  color: var(--muted);
+}
+.input:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+
+/* Tables: tabular figures where numbers align in columns. */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--axis) transparent;
+}
