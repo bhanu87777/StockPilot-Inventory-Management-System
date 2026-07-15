@@ -1,14 +1,17 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSession } from "@/lib/session";
+import { requirePermission } from "@/lib/rbac";
+import { audit } from "@/lib/audit";
+import { validateImageUrl } from "@/lib/products";
 
 type Params = { params: Promise<{ id: string }> };
 
 // PATCH /api/products/:id — edit catalog fields. Quantity is deliberately NOT
 // editable here: stock only changes through movements or PO receipts.
 export async function PATCH(req: Request, { params }: Params) {
-  const session = await getSession();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await requirePermission("product.edit");
+  if (!auth.ok) return auth.response;
+  const { session } = auth;
 
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
@@ -31,25 +34,78 @@ export async function PATCH(req: Request, { params }: Params) {
       data[field] = v;
     }
   }
+  if (body.barcode !== undefined) {
+    const barcode = typeof body.barcode === "string" && body.barcode.trim() ? body.barcode.trim() : null;
+    if (barcode) {
+      const dup = await prisma.product.findUnique({ where: { barcode } });
+      if (dup && dup.id !== id) {
+        return NextResponse.json({ error: `Barcode ${barcode} is already assigned to ${dup.sku}.` }, { status: 409 });
+      }
+    }
+    data.barcode = barcode;
+  }
+  if (body.imageUrl !== undefined) {
+    data.imageUrl = validateImageUrl(body.imageUrl);
+  }
+  if (body.isPerishable !== undefined) {
+    data.isPerishable = body.isPerishable === true;
+  }
+  if (body.shelfLifeDays !== undefined) {
+    const v = Math.floor(Number(body.shelfLifeDays) || 0);
+    data.shelfLifeDays = v > 0 ? v : null;
+  }
 
-  const product = await prisma.product.update({ where: { id }, data });
+  const product = await prisma.$transaction(async (tx) => {
+    const p = await tx.product.update({ where: { id }, data });
+    await audit(tx, session.user, {
+      action: "product.update",
+      entityType: "Product",
+      entityId: id,
+      summary: `Updated ${p.sku} (${Object.keys(data).join(", ")})`,
+      metadata: { fields: Object.keys(data) },
+    });
+    return p;
+  });
   return NextResponse.json(product);
 }
 
-// DELETE /api/products/:id — remove a SKU (cascades its movements). Blocked
-// while the SKU sits on a non-cancelled purchase order.
+// DELETE /api/products/:id — remove a SKU (cascades its movements and lots).
+// Blocked while the SKU sits on an open purchase or sales order.
 export async function DELETE(_req: Request, { params }: Params) {
-  const session = await getSession();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await requirePermission("product.delete");
+  if (!auth.ok) return auth.response;
+  const { session } = auth;
 
   const { id } = await params;
-  const onOpenPo = await prisma.purchaseOrderItem.count({
-    where: { productId: id, po: { status: { in: ["DRAFT", "ORDERED"] } } },
-  });
+  const [onOpenPo, onOpenSo] = await Promise.all([
+    prisma.purchaseOrderItem.count({
+      where: { productId: id, po: { status: { in: ["DRAFT", "ORDERED"] } } },
+    }),
+    prisma.salesOrderItem.count({
+      where: { productId: id, so: { status: { in: ["DRAFT", "CONFIRMED"] } } },
+    }),
+  ]);
   if (onOpenPo > 0) {
     return NextResponse.json({ error: "This SKU is on an open purchase order — cancel or receive it first." }, { status: 409 });
   }
-  await prisma.purchaseOrderItem.deleteMany({ where: { productId: id } }); // items on RECEIVED/CANCELLED POs
-  await prisma.product.delete({ where: { id } });
+  if (onOpenSo > 0) {
+    return NextResponse.json({ error: "This SKU is on an open sales order — cancel or fulfill it first." }, { status: 409 });
+  }
+
+  const snapshot = await prisma.product.findUnique({ where: { id }, select: { sku: true, name: true } });
+  if (!snapshot) return NextResponse.json({ error: "Product not found." }, { status: 404 });
+
+  await prisma.$transaction(async (tx) => {
+    // Items on RECEIVED/CANCELLED POs and FULFILLED/CANCELLED SOs.
+    await tx.purchaseOrderItem.deleteMany({ where: { productId: id } });
+    await tx.salesOrderItem.deleteMany({ where: { productId: id } });
+    await tx.product.delete({ where: { id } });
+    await audit(tx, session.user, {
+      action: "product.delete",
+      entityType: "Product",
+      entityId: id,
+      summary: `Deleted SKU ${snapshot.sku} — ${snapshot.name}`,
+    });
+  });
   return NextResponse.json({ ok: true });
 }

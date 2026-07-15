@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSession } from "@/lib/session";
+import { requirePermission } from "@/lib/rbac";
+import { audit } from "@/lib/audit";
 
 // POST /api/purchase-orders — create a draft PO with line items.
 export async function POST(req: Request) {
-  const session = await getSession();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await requirePermission("po.create");
+  if (!auth.ok) return auth.response;
+  const { session } = auth;
 
   const body = await req.json().catch(() => ({}));
   const supplierId = typeof body.supplierId === "string" ? body.supplierId : "";
@@ -36,16 +38,25 @@ export async function POST(req: Request) {
   const lastSeq = last ? Number(last.number.split("-").pop()) : 400;
   const number = `PO-2026-0${lastSeq + 1}`;
 
-  const po = await prisma.purchaseOrder.create({
-    data: {
-      number,
-      supplierId,
-      status: "DRAFT",
-      items: {
-        create: items.map((i) => ({ productId: i.productId, quantity: i.quantity, unitCost: costById.get(i.productId) ?? 0 })),
+  const po = await prisma.$transaction(async (tx) => {
+    const created = await tx.purchaseOrder.create({
+      data: {
+        number,
+        supplierId,
+        status: "DRAFT",
+        items: {
+          create: items.map((i) => ({ productId: i.productId, quantity: i.quantity, unitCost: costById.get(i.productId) ?? 0 })),
+        },
       },
-    },
-    include: { items: true },
+      include: { items: true },
+    });
+    await audit(tx, session.user, {
+      action: "po.create",
+      entityType: "PurchaseOrder",
+      entityId: created.id,
+      summary: `Created draft ${number} (${items.length} lines)`,
+    });
+    return created;
   });
   return NextResponse.json(po, { status: 201 });
 }

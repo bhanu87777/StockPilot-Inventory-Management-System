@@ -1,21 +1,45 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { PoBadge } from "@/components/Badges";
 import { formatMoney, dateLabel, relativeDays } from "@/lib/utils";
 import type { PoRow, ProductRow, SupplierRow } from "@/lib/inventory";
+import type { WarehouseRow } from "@/lib/warehouses";
 
 type DraftLine = { productId: string; quantity: string };
 
-export function PoView({ pos, products, suppliers }: { pos: PoRow[]; products: ProductRow[]; suppliers: SupplierRow[] }) {
+export function PoView({
+  pos,
+  products,
+  suppliers,
+  warehouses,
+  canTransition = true,
+}: {
+  pos: PoRow[];
+  products: ProductRow[];
+  suppliers: SupplierRow[];
+  warehouses: WarehouseRow[];
+  canTransition?: boolean;
+}) {
   const router = useRouter();
-  const [creating, setCreating] = useState(false);
+  // ?new=1 (command palette / shortcut) opens the create modal on mount; the
+  // effect below only strips the param.
+  const searchParams = useSearchParams();
+  const [creating, setCreating] = useState(searchParams.get("new") === "1" && canTransition);
   const [supplierId, setSupplierId] = useState(suppliers[0]?.id ?? "");
   const [lines, setLines] = useState<DraftLine[]>([{ productId: "", quantity: "" }]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actingOn, setActingOn] = useState<string | null>(null);
+  const defaultWarehouse = warehouses.find((w) => w.isDefault) ?? warehouses[0];
+  const [receiveInto, setReceiveInto] = useState(defaultWarehouse?.id ?? "");
+
+  useEffect(() => {
+    if (searchParams.get("new") === "1") {
+      router.replace("/purchase-orders", { scroll: false });
+    }
+  }, [searchParams, router]);
 
   const supplierProducts = products.filter((p) => p.supplierId === supplierId);
 
@@ -63,7 +87,7 @@ export function PoView({ pos, products, suppliers }: { pos: PoRow[]; products: P
     const res = await fetch(`/api/purchase-orders/${po.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify(action === "receive" ? { action, warehouseId: receiveInto } : { action }),
     });
     setActingOn(null);
     if (!res.ok) {
@@ -83,9 +107,11 @@ export function PoView({ pos, products, suppliers }: { pos: PoRow[]; products: P
             Draft → ordered → received. Receiving writes IN movements and updates stock in one transaction.
           </p>
         </div>
-        <button onClick={() => openCreate()} className="btn-accent rounded-lg px-5 py-2.5 text-sm">
-          + New purchase order
-        </button>
+        {canTransition && (
+          <button onClick={() => openCreate()} className="btn-accent rounded-lg px-5 py-2.5 text-sm">
+            + New purchase order
+          </button>
+        )}
       </div>
 
       <div className="flex flex-col gap-4">
@@ -97,7 +123,10 @@ export function PoView({ pos, products, suppliers }: { pos: PoRow[]; products: P
                 <PoBadge status={po.status} />
               </div>
               <div className="flex items-center gap-2">
-                {po.status === "DRAFT" && (
+                <a href={`/purchase-orders/${po.id}/print`} target="_blank" className="btn-ghost rounded-lg px-3 py-1.5 text-xs">
+                  ⎙ Print
+                </a>
+                {canTransition && po.status === "DRAFT" && (
                   <>
                     <button onClick={() => act(po, "order")} disabled={actingOn === po.id} className="btn-accent rounded-lg px-4 py-1.5 text-xs disabled:opacity-60">
                       Mark ordered
@@ -107,8 +136,20 @@ export function PoView({ pos, products, suppliers }: { pos: PoRow[]; products: P
                     </button>
                   </>
                 )}
-                {po.status === "ORDERED" && (
+                {canTransition && po.status === "ORDERED" && (
                   <>
+                    <select
+                      className="input w-auto py-1.5 text-xs"
+                      value={receiveInto}
+                      onChange={(e) => setReceiveInto(e.target.value)}
+                      title="Destination warehouse"
+                    >
+                      {warehouses.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          → {w.code}
+                        </option>
+                      ))}
+                    </select>
                     <button onClick={() => act(po, "receive")} disabled={actingOn === po.id} className="btn-accent rounded-lg px-4 py-1.5 text-xs disabled:opacity-60">
                       {actingOn === po.id ? "Receiving…" : "Receive into stock"}
                     </button>
@@ -161,7 +202,7 @@ export function PoView({ pos, products, suppliers }: { pos: PoRow[]; products: P
 
       {/* Create modal */}
       {creating && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(16,24,40,0.4)] p-4" onClick={() => setCreating(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] p-4" onClick={() => setCreating(false)}>
           <form onSubmit={submit} className="panel w-full max-w-xl space-y-4 p-6" onClick={(e) => e.stopPropagation()}>
             <h2 className="font-display text-xl font-bold">New purchase order</h2>
 

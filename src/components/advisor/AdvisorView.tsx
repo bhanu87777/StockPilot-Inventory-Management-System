@@ -21,7 +21,7 @@ export type AdvisorRunView = {
   }[];
 } | null;
 
-export function AdvisorView({ run }: { run: AdvisorRunView }) {
+export function AdvisorView({ run, canRun = true }: { run: AdvisorRunView; canRun?: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,9 +51,11 @@ export function AdvisorView({ run }: { run: AdvisorRunView }) {
             30-day velocity × supplier lead time × on-hand cover, ranked by what bites first.
           </p>
         </div>
-        <button onClick={generate} disabled={busy} className="btn-accent rounded-lg px-5 py-2.5 text-sm disabled:opacity-60">
-          {busy ? "Scanning the catalog…" : run ? "Re-run the planner" : "Run the planner"}
-        </button>
+        {canRun && (
+          <button onClick={generate} disabled={busy} className="btn-accent rounded-lg px-5 py-2.5 text-sm disabled:opacity-60">
+            {busy ? "Scanning the catalog…" : run ? "Re-run the planner" : "Run the planner"}
+          </button>
+        )}
       </div>
 
       {error && <p className="mb-4 text-sm text-critical">{error}</p>}

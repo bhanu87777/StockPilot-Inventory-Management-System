@@ -1,12 +1,18 @@
 @import "tailwindcss";
 
 /*
-  StockPilot design tokens — a committed light, industrial-precision look.
-  Chart series colors are the validated light-mode palette against --surface
-  (worst adjacent CVD ΔE 16.2, lightness band and chroma floor clean; aqua and
-  yellow sit below 3:1 so every chart ships a legend and a table view).
+  StockPilot design tokens — an industrial-precision look in two themes.
+  Light is the brand default; dark ships as `data-theme="dark"` on <html>,
+  set pre-paint by an inline script (localStorage + prefers-color-scheme).
+
+  Chart series colors are validated per theme against their card surface
+  (light: worst adjacent CVD ΔE 16.2 on #fcfcfb; dark: worst adjacent CVD
+  ΔE 8.4 on #171a20, all six ≥ 3:1). Fixed order — never cycled; sub-3:1
+  hues mean every chart ships a legend and a table view.
 */
 :root {
+  color-scheme: light;
+
   --page: #f4f4f1;
   --surface: #fcfcfb; /* card / chart surface (validated against) */
   --surface-2: #f1f1ed;
@@ -17,8 +23,11 @@
   --ink-secondary: #4c5462;
   --muted: #7c8394;
 
-  /* Brand chrome (UI accents, never data encoding) */
+  /* Brand chrome (UI accents, never data encoding).
+     --accent = fills (buttons), --accent-ink = accent used as text. */
   --accent: #1c5cab;
+  --accent-hover: #17509a;
+  --accent-ink: #1c5cab;
   --accent-bright: #2a78d6;
   --accent-wash: rgba(42, 120, 214, 0.09);
   --accent-fg: #ffffff;
@@ -30,15 +39,73 @@
   --viz-4: #4a3aa7; /* violet */
   --viz-5: #e34948; /* red    */
   --viz-6: #eb6834; /* orange */
+  --viz-violet-ink: #4a3aa7;
 
-  /* Status text (WCAG-clean on the light surface; always icon + label) */
+  /* Status text (WCAG-clean on the surface; always icon + label) */
   --good: #067d06;
   --warning: #8f6400;
   --critical: #c02b2b;
 
-  /* Chart chrome */
+  /* Badge tints */
+  --tint-good: #e9f6ec;
+  --tint-warning: #fdf3e0;
+  --tint-critical: #fdeceb;
+  --tint-accent: #eef2fb;
+  --tint-violet: #f3f0fa;
+
+  /* Chart chrome + interaction washes */
   --grid: #e6e5df;
   --axis: #c9c8c0;
+  --overlay: rgba(16, 24, 40, 0.4);
+  --hover-wash: rgba(16, 24, 40, 0.04);
+  --tooltip-shadow: 0 6px 20px rgba(16, 24, 40, 0.12);
+}
+
+/* Dark: slate-industrial, same structure. Text tokens WCAG-verified on
+   --surface (ink 14.5:1, ink-secondary 7.9:1, muted 5.0:1, status ≥ 6.2:1). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --page: #0f1114;
+  --surface: #171a20;
+  --surface-2: #1e222a;
+  --border: rgba(226, 232, 244, 0.08);
+  --border-strong: rgba(226, 232, 244, 0.16);
+
+  --ink: #e8eaf0;
+  --ink-secondary: #a8afbd;
+  --muted: #828a9c;
+
+  --accent: #1c5cab;
+  --accent-hover: #2a78d6;
+  --accent-ink: #5d9ee8;
+  --accent-bright: #4f95e8;
+  --accent-wash: rgba(93, 158, 232, 0.13);
+  --accent-fg: #ffffff;
+
+  --viz-1: #3987e5;
+  --viz-2: #199e70;
+  --viz-3: #c98500;
+  --viz-4: #9085e9;
+  --viz-5: #e5637f;
+  --viz-6: #b04a12;
+  --viz-violet-ink: #9085e9;
+
+  --good: #4cc06a;
+  --warning: #e0a520;
+  --critical: #f07575;
+
+  --tint-good: rgba(76, 192, 106, 0.14);
+  --tint-warning: rgba(224, 165, 32, 0.14);
+  --tint-critical: rgba(240, 117, 117, 0.14);
+  --tint-accent: rgba(93, 158, 232, 0.14);
+  --tint-violet: rgba(144, 133, 233, 0.14);
+
+  --grid: #262a32;
+  --axis: #3a3f4a;
+  --overlay: rgba(0, 0, 0, 0.6);
+  --hover-wash: rgba(226, 232, 244, 0.05);
+  --tooltip-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
 }
 
 @theme inline {
@@ -50,7 +117,8 @@
   --color-ink: var(--ink);
   --color-ink-secondary: var(--ink-secondary);
   --color-muted: var(--muted);
-  --color-accent: var(--accent);
+  /* text-accent is always accent-as-text; button fills use var(--accent) directly */
+  --color-accent: var(--accent-ink);
   --color-accent-bright: var(--accent-bright);
   --color-good: var(--good);
   --color-warning: var(--warning);
@@ -69,7 +137,8 @@ body {
   font-family: var(--font-grotesk), system-ui, sans-serif;
 }
 
-/* Panel: the standard card. Crisp hairline, barely-there shadow. */
+/* Panel: the standard card. Crisp hairline, barely-there shadow — in dark
+   the hairline borders carry the structure. */
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -91,7 +160,7 @@ body {
   transition: background 140ms ease, transform 140ms ease;
 }
 .btn-accent:hover {
-  background: #17509a;
+  background: var(--accent-hover);
 }
 .btn-accent:active {
   transform: translateY(1px);
@@ -131,7 +200,56 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Keyboard keycaps for the shortcuts overlay. */
+.kbd {
+  display: inline-block;
+  min-width: 1.5rem;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 0.375rem;
+  background: var(--surface-2);
+  color: var(--ink-secondary);
+  padding: 0.1rem 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Skeleton shimmer — theme-aware via tokens. */
+.skeleton {
+  background: linear-gradient(100deg, var(--surface-2) 40%, var(--border-strong) 50%, var(--surface-2) 60%);
+  background-size: 200% 100%;
+  border-radius: 0.375rem;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton {
+    animation: shimmer 1.4s infinite linear;
+  }
+}
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--axis) transparent;
+}
+
+/* Print: white paper, black ink, no chrome. */
+@media print {
+  :root,
+  :root[data-theme="dark"] {
+    --page: #ffffff;
+    --surface: #ffffff;
+    --ink: #000000;
+  }
+  .print-hide {
+    display: none !important;
+  }
 }

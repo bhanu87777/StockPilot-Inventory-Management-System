@@ -143,3 +143,72 @@ src/
 Email/password via **next-auth** (credentials, JWT sessions, bcrypt-hashed
 passwords). Every page and API route requires a valid session; the login screen
 pre-fills the demo operator so the app is one click from the warehouse.
+
+---
+
+## 8. v2 — Warehouses, lots, sales orders, and the platform layer
+
+v2 keeps the one core rule and scales it out: **balances are now per
+(product, warehouse)**, held in `StockLevel` rows; `Product.quantity` remains
+as the denormalized total so every existing read stays cheap.
+
+### 8.1 The ledger, per warehouse
+
+The movement transaction now locks the **stock-level row** (not the product):
+upsert the `(product, warehouse)` level, `SELECT … FOR UPDATE` it, check the
+per-warehouse balance (409 on oversell), then update the level and atomically
+increment the product total. Movements record `warehouseId`, an optional
+`lotId`, and `createdById` — the ledger says *where* and *who*, not just what.
+
+**Transfers** are paired `TRANSFER_OUT` / `TRANSFER_IN` movements sharing a
+`TR-YYYY-NNNN` reference. Both level rows are locked **in warehouseId order**
+so opposite concurrent transfers can never deadlock, and the product total is
+conserved — no separate Transfer model; the ledger stays the audit surface.
+
+### 8.2 Lots & FEFO
+
+Perishable SKUs carry `Lot` rows (`lotCode`, `expiryDate`, `qtyRemaining`).
+Lots are a pragmatic *allocation layer beneath the ledger*: `qtyRemaining` is a
+guarded counter kept in sync inside the same transactions
+(`updateMany … qtyRemaining >= qty`, 409 on overdraw), while `StockLevel`
+remains the source of truth — the invariant is
+`sum(qtyRemaining) <= StockLevel.quantity`. PO receiving auto-creates lots
+from `shelfLifeDays`; the movement form pre-selects the earliest-expiring lot
+(FEFO); sales-order fulfillment consumes lots FEFO automatically, one OUT
+movement per lot slice.
+
+### 8.3 Sales orders — the mirror of purchasing
+
+`Customer` + `SalesOrder`/`SalesOrderItem` mirror the PO trio exactly
+(DRAFT → CONFIRMED → FULFILLED / CANCELLED, `SO-YYYY-NNNN`, price snapshots at
+creation). **Fulfillment is the mirror of receiving**: one transaction locks
+each line's level at the order's warehouse, and if *any* line is short the
+whole order rejects with a 409 — nothing partial ever hits the books.
+
+### 8.4 RBAC, audit, notifications
+
+- **Roles** (`ADMIN` / `PURCHASING` / `VIEWER`) ride in the JWT. A pure
+  `can(role, action)` matrix (`lib/permissions.ts`) is shared by client views
+  (button gating) and the server guard `requirePermission()` (401/403) — every
+  mutating route enforces it.
+- **Audit** rows are written *inside* the same transactions via
+  `audit(tx, actor, …)` with dot-namespaced actions (`po.receive`,
+  `so.fulfill`, `user.role_change`). No FK to User — rows snapshot the email
+  and survive user deletion.
+- **Notifications** are global facts with per-user read state
+  (`NotificationRead`). They are emitted synchronously inside write
+  transactions (low stock / stockout / received / fulfilled) and deduped by an
+  unresolved-row check; overdue POs and expiring lots are swept lazily when
+  the feed is fetched — no cron needed on serverless.
+
+### 8.5 The luxury layer
+
+Dark mode is pure CSS: both themes are validated token sets in `globals.css`
+(`:root` / `:root[data-theme="dark"]`), stamped pre-paint by an inline script,
+and the Recharts kit passes `var(--viz-*)` strings straight into SVG props so
+charts re-theme with zero JS. The ⌘K palette fuzzy-matches static commands
+client-side and debounces entity search through `GET /api/search`. Barcodes
+are Code 128 SVGs from `bwip-js` (label sheets sized for A4 print CSS);
+scanning needs no dependency — USB scanners are keyboard wedges, and camera
+scanning feature-detects the `BarcodeDetector` Web API. CSV in and out share
+one hand-rolled RFC-4180 util (BOM'd output, formula-injection guarded).

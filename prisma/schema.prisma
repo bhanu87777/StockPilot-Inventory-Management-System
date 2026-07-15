@@ -3,6 +3,10 @@
 // quietly ties up cash. Solution: a single source of truth for SKUs, an
 // append-only movement ledger that drives on-hand quantities, purchase
 // orders that receive into stock atomically, and an AI reorder advisor.
+//
+// v2: multi-warehouse stock levels + transfers, lot/expiry tracking (FEFO),
+// customers + sales orders (mirror of the PO trio), role-based access,
+// an audit trail, and a notification feed.
 
 generator client {
   provider = "prisma-client-js"
@@ -14,13 +18,23 @@ datasource db {
   directUrl = env("DIRECT_URL") // direct, migrations / db push
 }
 
+enum Role {
+  ADMIN // everything, incl. user management + audit log
+  PURCHASING // products, movements, POs, SOs — no user management
+  VIEWER // read-only
+}
+
 // The operator (ops / warehouse lead) who signs in.
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
   name      String?
   password  String // bcrypt hash
+  role      Role     @default(ADMIN) // default backfills pre-RBAC rows; register route creates VIEWERs explicitly
   createdAt DateTime @default(now())
+
+  movements StockMovement[]
+  reads     NotificationRead[]
 }
 
 model Supplier {
@@ -33,21 +47,54 @@ model Supplier {
   purchaseOrders PurchaseOrder[]
 }
 
-model Product {
-  id           String  @id @default(cuid())
-  sku          String  @unique
-  name         String
-  category     String
-  unitCost     Float
-  price        Float
-  quantity     Int     @default(0) // on hand — only mutated via the movement ledger
-  reorderPoint Int // alert when quantity falls to/below this
-  reorderQty   Int // default order size suggested to purchasing
-  supplierId   String
-  supplier     Supplier @relation(fields: [supplierId], references: [id])
+model Warehouse {
+  id        String  @id @default(cuid())
+  code      String  @unique // "MAIN", "EAST", "OUT"
+  name      String
+  city      String?
+  isDefault Boolean @default(false) // exactly one; movements/PO receive fall back to it
 
-  movements StockMovement[]
-  poItems   PurchaseOrderItem[]
+  stockLevels StockLevel[]
+  movements   StockMovement[]
+  lots        Lot[]
+  salesOrders SalesOrder[]
+}
+
+// Per-warehouse on-hand. Ledger-derived, same invariant as Product.quantity:
+// only mutated inside movement transactions that lock this row.
+model StockLevel {
+  id          String    @id @default(cuid())
+  quantity    Int       @default(0)
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+
+  @@unique([productId, warehouseId])
+}
+
+model Product {
+  id            String  @id @default(cuid())
+  sku           String  @unique
+  name          String
+  category      String
+  unitCost      Float
+  price         Float
+  quantity      Int     @default(0) // on hand across all warehouses — only mutated via the movement ledger
+  reorderPoint  Int // alert when quantity falls to/below this
+  reorderQty    Int // default order size suggested to purchasing
+  barcode       String? @unique // defaults to SKU; printed as Code 128
+  imageUrl      String?
+  isPerishable  Boolean @default(false)
+  shelfLifeDays Int? // drives auto lot expiry on PO receive
+  supplierId    String
+  supplier      Supplier @relation(fields: [supplierId], references: [id])
+
+  movements   StockMovement[]
+  poItems     PurchaseOrderItem[]
+  soItems     SalesOrderItem[]
+  stockLevels StockLevel[]
+  lots        Lot[]
 
   @@index([category])
 }
@@ -56,23 +103,55 @@ enum MovementType {
   IN // goods received
   OUT // sales / issues
   ADJUST // cycle count corrections, shrinkage (quantity may be negative)
+  TRANSFER_OUT // leaving a warehouse; paired with a TRANSFER_IN via reference
+  TRANSFER_IN // arriving at a warehouse; product total is conserved
 }
 
-// Append-only ledger. `balance` snapshots on-hand after the movement so the
-// history is auditable without replaying.
+// Append-only ledger. `balance` snapshots the (product, warehouse) level
+// after the movement so the history is auditable without replaying.
 model StockMovement {
-  id         String       @id @default(cuid())
-  type       MovementType
-  quantity   Int // positive for IN/OUT; ADJUST carries a signed delta
-  balance    Int
-  reason     String
-  reference  String? // e.g. order number, PO number
-  occurredAt DateTime     @default(now())
-  productId  String
-  product    Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id          String       @id @default(cuid())
+  type        MovementType
+  quantity    Int // positive for IN/OUT/TRANSFER_*; ADJUST carries a signed delta
+  balance     Int // per-(product, warehouse) level after this movement
+  reason      String
+  reference   String? // e.g. order number, PO/SO/TR number
+  occurredAt  DateTime     @default(now())
+  productId   String
+  product     Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouseId String
+  warehouse   Warehouse    @relation(fields: [warehouseId], references: [id])
+  lotId       String?
+  lot         Lot?         @relation(fields: [lotId], references: [id], onDelete: SetNull)
+  createdById String?
+  createdBy   User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([occurredAt])
   @@index([productId, occurredAt])
+  @@index([warehouseId, occurredAt])
+}
+
+// Pragmatic lot tracking for perishable SKUs: qtyRemaining is a counter kept
+// in sync inside the same transactions that move stock; StockLevel stays the
+// ledger-derived source of truth, lots are an allocation layer beneath it
+// (movement.lotId gives the audit trail).
+// Invariant: sum(qtyRemaining) <= StockLevel.quantity per (product, warehouse).
+model Lot {
+  id           String    @id @default(cuid())
+  lotCode      String // "LOT-2607-014"
+  expiryDate   DateTime
+  qtyReceived  Int
+  qtyRemaining Int
+  receivedAt   DateTime  @default(now())
+  productId    String
+  product      Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouseId  String
+  warehouse    Warehouse @relation(fields: [warehouseId], references: [id])
+
+  movements StockMovement[]
+
+  @@unique([productId, warehouseId, lotCode])
+  @@index([expiryDate])
 }
 
 enum PoStatus {
@@ -103,6 +182,106 @@ model PurchaseOrderItem {
   po        PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
   productId String
   product   Product       @relation(fields: [productId], references: [id])
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  country   String
+  createdAt DateTime @default(now())
+
+  salesOrders SalesOrder[]
+}
+
+enum SoStatus {
+  DRAFT
+  CONFIRMED
+  FULFILLED
+  CANCELLED
+}
+
+// Outbound mirror of the PO trio. Fulfillment decrements stock via OUT
+// movements atomically at the order's warehouse (all-or-nothing).
+model SalesOrder {
+  id          String    @id @default(cuid())
+  number      String    @unique // SO-2026-0001
+  status      SoStatus  @default(DRAFT)
+  createdAt   DateTime  @default(now())
+  confirmedAt DateTime?
+  fulfilledAt DateTime?
+  customerId  String
+  customer    Customer  @relation(fields: [customerId], references: [id])
+  warehouseId String // fulfill-from warehouse, chosen at creation
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  items       SalesOrderItem[]
+}
+
+model SalesOrderItem {
+  id        String     @id @default(cuid())
+  quantity  Int
+  unitPrice Float // snapshot of Product.price at creation
+  soId      String
+  so        SalesOrder @relation(fields: [soId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product    @relation(fields: [productId], references: [id])
+}
+
+// Immutable who-did-what trail. No FK to User on purpose: rows must survive
+// user deletion; userEmail is a point-in-time snapshot. Actions are
+// dot-namespaced: "product.create", "po.receive", "user.role_change", ...
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  userEmail  String
+  action     String
+  entityType String // "Product" | "StockMovement" | "PurchaseOrder" | "SalesOrder" | "User" | ...
+  entityId   String?
+  summary    String // human sentence: "Received PO-2026-0403 (2 lines, +330 units)"
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@index([userId])
+}
+
+enum NotificationType {
+  LOW_STOCK
+  STOCKOUT
+  PO_RECEIVED
+  PO_OVERDUE
+  SO_FULFILLED
+  LOT_EXPIRING
+}
+
+// Global events (facts about inventory, not about a user); per-user read
+// state lives in NotificationRead. `resolvedAt` is the dedup anchor: at most
+// one unresolved notification per (type, entityId).
+model Notification {
+  id         String           @id @default(cuid())
+  type       NotificationType
+  title      String
+  body       String
+  entityType String?
+  entityId   String?
+  href       String? // deep link, e.g. "/purchase-orders"
+  createdAt  DateTime         @default(now())
+  resolvedAt DateTime?
+  reads      NotificationRead[]
+
+  @@index([createdAt])
+  @@index([type, entityId, resolvedAt])
+}
+
+model NotificationRead {
+  notificationId String
+  userId         String
+  readAt         DateTime     @default(now())
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, userId])
 }
 
 enum Urgency {

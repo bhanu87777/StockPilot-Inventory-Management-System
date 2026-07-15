@@ -40,9 +40,12 @@ books can never silently drift.
 
 On top of that ledger it adds the things a spreadsheet can't:
 
-- 🧾 **An append-only movement ledger** — every unit in or out is an immutable, timestamped movement (`IN` / `OUT` / signed `ADJUST`) that snapshots the resulting balance for full auditability.
-- 🔒 **Race-safe writes** — ledger writes lock the product row in a transaction (`SELECT … FOR UPDATE`); an `OUT` that would oversell is rejected with a **409**.
-- 📥 **Atomic purchase-order receiving** — receiving a PO increments stock *and* writes the matching `IN` movements in one Prisma transaction, so the books always agree.
+- 🧾 **An append-only movement ledger** — every unit in or out is an immutable, timestamped movement (`IN` / `OUT` / signed `ADJUST` / paired `TRANSFER`) that snapshots the resulting per-warehouse balance and records **who** moved it.
+- 🏭 **Multi-warehouse stock** — per-site levels, deadlock-safe transfers that conserve the product total, and a per-warehouse 409 on oversell (`SELECT … FOR UPDATE` on the stock-level row).
+- 📥 **Atomic order flows both ways** — receiving a PO increments stock + writes `IN` movements in one transaction; fulfilling a **sales order** is its all-or-nothing mirror, auto-picking lots **FEFO** for perishables.
+- ⏳ **Lot & expiry tracking** — perishable SKUs carry lots with expiry dates; the dashboard warns about cash at risk before it becomes a write-off.
+- 🔐 **Role-based access + audit trail** — admin / purchasing / viewer roles enforced on every route, with a who-did-what audit log and an in-app notification feed (low stock, stockouts, overdue POs, expiring lots).
+- ✨ **A luxurious console** — dark mode, a ⌘K command palette with global search, keyboard shortcuts, barcode label printing + camera/USB scanning, CSV import/export, printable POs, and skeleton loading states.
 - 🤖 **An AI reorder advisor** — Claude reads per-SKU velocity, days of cover, supplier lead time, and stock already inbound, then ranks **what to order now, what can wait, and which stock is dead cash** — with a transparent heuristic fallback so it always works.
 
 > **The one-liner:** a Next.js 16 App-Router app where server components read a
@@ -52,7 +55,7 @@ On top of that ledger it adds the things a spreadsheet can't:
 
 <div align="center">
 
-**🔑 Demo login** &nbsp;·&nbsp; `demo@stockpilot.app` &nbsp;/&nbsp; `demo1234`
+**🔑 Demo logins** (all `demo1234`) &nbsp;·&nbsp; `demo@stockpilot.app` *(admin)* &nbsp;·&nbsp; `purchasing@stockpilot.app` &nbsp;·&nbsp; `viewer@stockpilot.app`
 
 </div>
 
@@ -111,11 +114,18 @@ On top of that ledger it adds the things a spreadsheet can't:
 
 | Area | What it does |
 |------|--------------|
-| 📊 **Dashboard** | Inventory value, stock alerts, open-PO exposure; weekly units-in vs units-out from the ledger; stock value by category; a worst-first alert table. |
-| 📋 **Inventory** | Full SKU catalog CRUD with search and category/status filters. On-hand quantity is deliberately **not** editable — stock only changes through movements or PO receipts. |
-| 🔁 **Movements** | The append-only ledger with a record form (IN / OUT / signed ADJUST). Writes lock the product row (`SELECT … FOR UPDATE`); oversells are rejected with a **409**; every entry snapshots the resulting balance. |
-| 🧾 **Purchase orders** | Draft → ordered → received status machine with guards. Receiving increments stock and writes IN movements in one Prisma transaction. "Prefill low-stock SKUs" builds an order in one click. |
-| 🚚 **Suppliers** | Directory with lead times, which drive the advisor's math. |
+| 📊 **Dashboard** | Inventory value, stock alerts, open-PO exposure, 30-day revenue, open-SO pipeline; weekly units-in vs units-out; stock value by category; worst-first alerts; expiring-lot warnings. |
+| 📋 **Inventory** | Full SKU catalog CRUD with search, filters, product images, barcodes, and CSV import/export. On-hand quantity is deliberately **not** editable — stock only changes through the ledger. |
+| 🔁 **Movements** | The append-only ledger with a record form (IN / OUT / signed ADJUST) per warehouse, FEFO lot picking, and barcode scan-to-fill (USB wedge or phone camera). Writes lock the (product, warehouse) stock-level row; oversells are rejected with a **409**; every entry snapshots the resulting balance and its operator. |
+| 🏭 **Warehouses** | Per-site stock levels, value breakdowns, lots-on-hand, and transfers — paired `TRANSFER_OUT`/`TRANSFER_IN` rows sharing a `TR-` reference, locking both level rows in deterministic order (deadlock-safe), conserving the product total. |
+| 🧾 **Purchase orders** | Draft → ordered → received status machine with guards. Receiving picks a destination warehouse, increments stock, writes IN movements, and auto-creates lots for perishables in one Prisma transaction. Printable PO documents (print-CSS, "Save as PDF"). |
+| 🛒 **Sales orders** | The outbound mirror: draft → confirmed → fulfilled. Fulfillment is all-or-nothing at the order's warehouse — any short line rejects the whole order with a 409 — and drains perishable lots earliest-expiry-first. |
+| ⏳ **Lots & expiry** | Perishable SKUs carry lots (`LOT-YYMM-NNN`) with expiry dates; FEFO hints in the movement form; a dashboard panel prices the units at risk. |
+| 🚚 **Suppliers & customers** | Directories with lead times (drive the advisor's math) and lifetime revenue. |
+| 🔐 **RBAC & audit** | Admin / purchasing / viewer roles carried in the JWT and enforced on every mutating route; an admin users page; a filterable audit log where every action lands with a human-readable summary. |
+| 🔔 **Notifications** | In-app feed + bell: low stock, stockouts, PO received/overdue, SO fulfilled, lots expiring — deduped while unresolved, auto-resolved when stock recovers. |
+| 📑 **Reports** | Stock valuation grouped by category/supplier with subtotals, movement history by date range, and PO history — all as CSV downloads (BOM'd, injection-safe). |
+| ✨ **Luxury UI** | Dark mode (validated dark chart palette), ⌘K command palette with fuzzy commands + server-backed global search, `g`/`n` keyboard chords, skeleton loading states, barcode label sheets. |
 | 🤖 **Reorder advisor** | Claude reads per-SKU velocity (30-day), on-hand cover, supplier lead time, and inbound stock, then ranks what to order now, what can wait, and which stock is dead cash. Heuristic fallback when no key is set. |
 
 > 📐 A deeper dive — the ledger transaction, the PO state machine, and the advisor math — lives in **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
@@ -127,11 +137,12 @@ On top of that ledger it adds the things a spreadsheet can't:
 | Layer | Technology |
 |-------|-----------|
 | **Framework** | Next.js 16 (App Router, Server Components) |
-| **UI** | React 19 · Tailwind CSS 4 · Recharts |
+| **UI** | React 19 · Tailwind CSS 4 (dual-theme CSS tokens) · Recharts |
 | **Language** | TypeScript 5 |
 | **Database** | PostgreSQL |
 | **ORM** | Prisma 6 |
-| **Auth** | next-auth (credentials, JWT) + bcryptjs |
+| **Auth** | next-auth (credentials, JWT) + bcryptjs · role-based access control |
+| **Barcodes** | `bwip-js` (Code 128 SVG) · BarcodeDetector Web API (camera scanning, zero-dep) |
 | **AI** | Anthropic Claude (`@anthropic-ai/sdk`) · Google Gemini (optional) · heuristic fallback |
 
 ---
@@ -159,13 +170,13 @@ cp .env.example .env
 
 # 4. Create the schema + seed 90 days of warehouse life
 npx prisma db push       # creates the stockpilot database + tables
-npm run db:seed          # 30 SKUs, 6 suppliers, ~2,400 movements, 4 POs
+npm run db:seed          # 35 SKUs, 3 warehouses, ~3,200 movements, lots, SOs, POs
 
 # 5. Run the dev server
 npm run dev              # → http://localhost:3000
 ```
 
-Then sign in with the demo account: **`demo@stockpilot.app` / `demo1234`**.
+Then sign in (all passwords `demo1234`): **`demo@stockpilot.app`** (admin) · **`purchasing@stockpilot.app`** · **`viewer@stockpilot.app`** (read-only).
 
 ---
 
@@ -183,9 +194,13 @@ Then sign in with the demo account: **`demo@stockpilot.app` / `demo1234`**.
 
 **How the demo data is made** — a seeded PRNG replays 90 days of warehouse life
 per SKU: an opening balance, Poisson-ish daily sales (weekends slower), scheduled
-replenishment for fast movers, and occasional cycle-count adjustments — then
-engineers specific stories the app should catch: a fast mover stocked out with a
-PO in transit, a SKU below its reorder point, and dead-stock items tying up cash.
+replenishment for fast movers, satellite-warehouse slices for the fast movers,
+recent transfers, and occasional cycle-count adjustments — then engineers specific
+stories the app should catch: a fast mover stocked out with a PO in transit, SKUs
+below their reorder points, dead stock tying up cash, a thermal-paste lot expiring
+in ~10 days, an expired duster lot awaiting write-off, a confirmed sales order too
+big for its warehouse (fulfilling it demos the atomic 409), and real `SO-`/`TR-`
+references in the ledger that resolve to actual orders and transfers.
 
 ---
 
@@ -200,17 +215,23 @@ StockPilot-Inventory-Management-System/
 │   ├── StockPilot_1_Features_Walkthrough.pdf
 │   └── StockPilot_2_Codebase_Guide.pdf
 ├── prisma/
-│   ├── schema.prisma         # User, Supplier, Product, StockMovement, PurchaseOrder, AdvisorRun
-│   └── seed.ts               # 90-day deterministic warehouse generator
+│   ├── schema.prisma         # User(+Role), Warehouse, StockLevel, Product, Lot, StockMovement,
+│   │                         #   PurchaseOrder, Customer, SalesOrder, AuditLog, Notification, AdvisorRun
+│   └── seed.ts               # 90-day deterministic multi-warehouse generator
 ├── src/
 │   ├── app/
-│   │   ├── api/              # products, movements, purchase-orders, advisor, auth
-│   │   ├── dashboard/ · inventory/ · movements/       # server-rendered pages
-│   │   ├── purchase-orders/ · suppliers/ · advisor/
+│   │   ├── api/              # products(+import), movements, transfers, warehouses, purchase-orders,
+│   │   │                     #   sales-orders, customers, users, notifications, reports, search, advisor, auth
+│   │   ├── (app)/            # authed pages behind one layout (session + shell + ⌘K palette):
+│   │   │                     #   dashboard · inventory · movements · warehouses · purchase-orders
+│   │   │                     #   sales-orders · suppliers · customers · advisor · reports
+│   │   │                     #   notifications · audit · settings/users  (+ loading skeletons)
+│   │   ├── purchase-orders/[id]/print/ · inventory/labels/   # printable documents
 │   │   ├── login/ · signup/ · page.tsx (landing)
-│   │   └── layout.tsx
-│   ├── components/           # per-view UIs + charts + shell
-│   └── lib/                  # the hub: inventory · advisor · auth · prisma · utils
+│   │   └── layout.tsx        # fonts + no-flash theme script
+│   ├── components/           # per-view UIs + charts + shell + palette + scan + skeletons
+│   └── lib/                  # the hub: inventory · sales · warehouses · reports · notifications
+│                             #   audit · permissions · rbac · csv · search · advisor · auth · prisma
 ├── .env.example
 ├── LICENSE
 └── package.json
@@ -223,12 +244,15 @@ StockPilot-Inventory-Management-System/
 
 ## 🔭 Future Improvements
 
-- [ ] **Multi-warehouse / locations** — stock and transfers across sites
-- [ ] **Barcode scanning** — receive and issue stock from a phone camera
-- [ ] **Role-based access** — separate operator, purchasing, and viewer roles
+- [x] **Multi-warehouse / locations** — stock and transfers across sites
+- [x] **Barcode scanning** — labels + USB wedge + phone camera (BarcodeDetector API)
+- [x] **Role-based access** — admin, purchasing, and viewer roles + audit log
+- [x] **Export & reporting** — CSV valuation/movement/PO reports + printable POs
+- [x] **Sales orders & customers** — the outbound mirror of purchasing
+- [x] **Lot & expiry tracking** — FEFO picking + expiring-stock alerts
+- [x] **Notifications** — in-app feed for low stock, stockouts, overdue POs
 - [ ] **Auto-generated POs** — one click from the advisor's "order this week" list
 - [ ] **Demand forecasting** — seasonality-aware velocity instead of a 30-day mean
-- [ ] **Export & reporting** — CSV / PDF stock valuation and movement reports
 - [ ] **Test suite** — unit tests for the ledger transaction + advisor math
 
 ---

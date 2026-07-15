@@ -11,11 +11,16 @@ export type ProductRow = {
   quantity: number;
   reorderPoint: number;
   reorderQty: number;
+  barcode: string | null;
+  imageUrl: string | null;
+  isPerishable: boolean;
+  shelfLifeDays: number | null;
   supplierId: string;
   supplierName: string;
   leadTimeDays: number;
   velocity30d: number; // avg units OUT per day, last 30 days
   lastOutAt: string | null;
+  levels: { warehouseId: string; code: string; quantity: number }[];
 };
 
 export type MovementRow = {
@@ -29,6 +34,25 @@ export type MovementRow = {
   productId: string;
   productName: string;
   sku: string;
+  warehouseCode: string;
+  lotCode: string | null;
+  createdByName: string | null;
+};
+
+export type LotRow = {
+  id: string;
+  lotCode: string;
+  expiryDate: string;
+  qtyReceived: number;
+  qtyRemaining: number;
+  receivedAt: string;
+  productId: string;
+  sku: string;
+  productName: string;
+  warehouseId: string;
+  warehouseCode: string;
+  daysToExpiry: number;
+  unitCost: number;
 };
 
 export type SupplierRow = {
@@ -63,7 +87,13 @@ export function stockStatus(p: { quantity: number; reorderPoint: number }): "OUT
 export async function getProducts(): Promise<ProductRow[]> {
   const since = new Date(Date.now() - 30 * 86_400_000);
   const [products, outs] = await Promise.all([
-    prisma.product.findMany({ include: { supplier: true }, orderBy: { sku: "asc" } }),
+    prisma.product.findMany({
+      include: {
+        supplier: true,
+        stockLevels: { include: { warehouse: { select: { code: true } } }, orderBy: { warehouse: { code: "asc" } } },
+      },
+      orderBy: { sku: "asc" },
+    }),
     prisma.stockMovement.groupBy({
       by: ["productId"],
       where: { type: "OUT", occurredAt: { gte: since } },
@@ -90,11 +120,16 @@ export async function getProducts(): Promise<ProductRow[]> {
     quantity: p.quantity,
     reorderPoint: p.reorderPoint,
     reorderQty: p.reorderQty,
+    barcode: p.barcode,
+    imageUrl: p.imageUrl,
+    isPerishable: p.isPerishable,
+    shelfLifeDays: p.shelfLifeDays,
     supplierId: p.supplierId,
     supplierName: p.supplier.name,
     leadTimeDays: p.supplier.leadTimeDays,
     velocity30d: Math.round(((outBySku.get(p.id) ?? 0) / 30) * 100) / 100,
     lastOutAt: lastOutBy.get(p.id)?.toISOString() ?? null,
+    levels: p.stockLevels.map((l) => ({ warehouseId: l.warehouseId, code: l.warehouse.code, quantity: l.quantity })),
   }));
 }
 
@@ -102,7 +137,12 @@ export async function getMovements(limit = 400): Promise<MovementRow[]> {
   const rows = await prisma.stockMovement.findMany({
     orderBy: { occurredAt: "desc" },
     take: limit,
-    include: { product: { select: { name: true, sku: true } } },
+    include: {
+      product: { select: { name: true, sku: true } },
+      warehouse: { select: { code: true } },
+      lot: { select: { lotCode: true } },
+      createdBy: { select: { name: true, email: true } },
+    },
   });
   return rows.map((m) => ({
     id: m.id,
@@ -115,7 +155,43 @@ export async function getMovements(limit = 400): Promise<MovementRow[]> {
     productId: m.productId,
     productName: m.product.name,
     sku: m.product.sku,
+    warehouseCode: m.warehouse.code,
+    lotCode: m.lot?.lotCode ?? null,
+    createdByName: m.createdBy?.name ?? m.createdBy?.email ?? null,
   }));
+}
+
+// Active lots in FEFO order (earliest expiry first — the sort IS the policy).
+export async function getLots(): Promise<LotRow[]> {
+  const rows = await prisma.lot.findMany({
+    where: { qtyRemaining: { gt: 0 } },
+    orderBy: { expiryDate: "asc" },
+    include: {
+      product: { select: { sku: true, name: true, unitCost: true } },
+      warehouse: { select: { code: true } },
+    },
+  });
+  const now = Date.now();
+  return rows.map((l) => ({
+    id: l.id,
+    lotCode: l.lotCode,
+    expiryDate: l.expiryDate.toISOString(),
+    qtyReceived: l.qtyReceived,
+    qtyRemaining: l.qtyRemaining,
+    receivedAt: l.receivedAt.toISOString(),
+    productId: l.productId,
+    sku: l.product.sku,
+    productName: l.product.name,
+    warehouseId: l.warehouseId,
+    warehouseCode: l.warehouse.code,
+    daysToExpiry: Math.ceil((l.expiryDate.getTime() - now) / 86_400_000),
+    unitCost: l.product.unitCost,
+  }));
+}
+
+export async function getExpiringLots(withinDays = 30): Promise<LotRow[]> {
+  const lots = await getLots();
+  return lots.filter((l) => l.daysToExpiry <= withinDays);
 }
 
 export async function getSuppliers(): Promise<SupplierRow[]> {

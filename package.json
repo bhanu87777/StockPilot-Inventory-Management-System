@@ -19,6 +19,7 @@
     "@prisma/adapter-neon": "^6.19.3",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
+    "bwip-js": "^4.11.2",
     "next": "16.2.10",
     "next-auth": "^4.24.14",
     "prisma": "^6.19.3",

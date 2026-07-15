@@ -16,8 +16,11 @@ const grotesk = Space_Grotesk({
 export const metadata: Metadata = {
   title: "StockPilot — inventory that warns you first",
   description:
-    "Inventory management with an append-only stock ledger, purchase orders that receive atomically, low-stock alerts, and an AI reorder advisor powered by Claude.",
+    "Inventory management with an append-only stock ledger, multi-warehouse transfers, purchase and sales orders, lot tracking, and an AI reorder advisor powered by Claude.",
 };
+
+// Applies the saved (or system) theme before first paint — no flash.
+const themeScript = `try{var t=localStorage.getItem("sp-theme");if(t==="dark"||(!t&&matchMedia("(prefers-color-scheme: dark)").matches))document.documentElement.dataset.theme="dark"}catch(e){}`;
 
 export default function RootLayout({
   children,
@@ -25,7 +28,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${grotesk.variable} h-full antialiased`}>
+    <html lang="en" className={`${inter.variable} ${grotesk.variable} h-full antialiased`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className="min-h-full flex flex-col">
         <Providers>{children}</Providers>
       </body>

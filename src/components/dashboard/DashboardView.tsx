@@ -13,9 +13,10 @@ import {
   YAxis,
 } from "recharts";
 import { ChartCard, ChartTooltip, LegendKeys, VIZ, gridProps, axisTick, axisLine, cursorLine } from "@/components/charts/chartKit";
-import { StockBadge, MovementBadge } from "@/components/Badges";
+import { StockBadge, MovementBadge, ExpiryBadge } from "@/components/Badges";
 import { formatMoneyCompact, dateTimeLabel } from "@/lib/utils";
-import type { ProductRow, MovementRow } from "@/lib/inventory";
+import type { ProductRow, MovementRow, LotRow } from "@/lib/inventory";
+import type { SalesStats } from "@/lib/sales";
 
 export function DashboardView({
   products,
@@ -23,12 +24,16 @@ export function DashboardView({
   recentMovements,
   openPoValue,
   openPoCount,
+  expiringLots,
+  salesStats,
 }: {
   products: ProductRow[];
   flows: { week: string; in: number; out: number }[];
   recentMovements: MovementRow[];
   openPoValue: number;
   openPoCount: number;
+  expiringLots: LotRow[];
+  salesStats: SalesStats;
 }) {
   const stockValue = products.reduce((s, p) => s + p.quantity * p.unitCost, 0);
   const low = products.filter((p) => p.quantity > 0 && p.quantity <= p.reorderPoint);
@@ -52,7 +57,7 @@ export function DashboardView({
       </div>
 
       {/* KPI row */}
-      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <Stat label="Inventory value" value={formatMoneyCompact(stockValue)} sub="on-hand units × unit cost" />
         <Stat label="Active SKUs" value={String(products.length)} sub={`across ${byCategory.size} categories`} />
         <Stat
@@ -62,6 +67,8 @@ export function DashboardView({
           tone={alerts.length > 0 ? "warn" : "ok"}
         />
         <Stat label="Open PO value" value={formatMoneyCompact(openPoValue)} sub={`${openPoCount} draft / in transit`} />
+        <Stat label="Revenue (30d)" value={formatMoneyCompact(salesStats.revenue30d)} sub={`${salesStats.fulfilled30d} orders fulfilled`} />
+        <Stat label="Open SO value" value={formatMoneyCompact(salesStats.openSoValue)} sub={`${salesStats.openSoCount} draft / confirmed`} />
       </div>
 
       {/* Charts */}
@@ -92,13 +99,58 @@ export function DashboardView({
                 <CartesianGrid {...gridProps} />
                 <XAxis dataKey="category" tick={axisTick} axisLine={axisLine} tickLine={false} interval={0} />
                 <YAxis tick={axisTick} axisLine={false} tickLine={false} tickFormatter={(v: number) => formatMoneyCompact(v)} width={52} />
-                <Tooltip content={<ChartTooltip format={(v) => formatMoneyCompact(v)} />} cursor={{ fill: "rgba(16,24,40,0.04)" }} />
+                <Tooltip content={<ChartTooltip format={(v) => formatMoneyCompact(v)} />} cursor={{ fill: "var(--hover-wash)" }} />
                 <Bar dataKey="Value" fill={VIZ.blue} maxBarSize={24} radius={[4, 4, 0, 0]} isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </ChartCard>
       </div>
+
+      {/* Expiring lots — cash at risk */}
+      {expiringLots.length > 0 && (
+        <section className="panel panel-hover mb-5 p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold">Expiring soon</h3>
+              <p className="mt-0.5 text-xs text-muted">Lots within 30 days of expiry — units at risk of write-off</p>
+            </div>
+            <Link href="/warehouses" className="btn-ghost rounded-lg px-3 py-1.5 text-xs">
+              All lots →
+            </Link>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
+                  <th className="pb-2.5 pr-4 font-semibold">Lot</th>
+                  <th className="pb-2.5 pr-4 font-semibold">SKU</th>
+                  <th className="pb-2.5 pr-4 font-semibold">Product</th>
+                  <th className="pb-2.5 pr-4 font-semibold">WH</th>
+                  <th className="pb-2.5 pr-4 text-right font-semibold">Units</th>
+                  <th className="pb-2.5 pr-4 text-right font-semibold">At risk</th>
+                  <th className="pb-2.5 font-semibold">Expiry</th>
+                </tr>
+              </thead>
+              <tbody>
+                {expiringLots.map((l) => (
+                  <tr key={l.id} className="border-b border-border/60 last:border-0">
+                    <td className="num py-2.5 pr-4 text-xs">{l.lotCode}</td>
+                    <td className="num py-2.5 pr-4 text-xs text-muted">{l.sku}</td>
+                    <td className="py-2.5 pr-4 font-semibold">{l.productName}</td>
+                    <td className="num py-2.5 pr-4 text-xs text-muted">{l.warehouseCode}</td>
+                    <td className="num py-2.5 pr-4 text-right font-bold">{l.qtyRemaining}</td>
+                    <td className="num py-2.5 pr-4 text-right text-ink-secondary">{formatMoneyCompact(l.qtyRemaining * l.unitCost)}</td>
+                    <td className="py-2.5">
+                      <ExpiryBadge daysToExpiry={l.daysToExpiry} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* Alerts + recent movements */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">

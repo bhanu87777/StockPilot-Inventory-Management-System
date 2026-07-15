@@ -1,26 +1,27 @@
 "use client";
 
 /*
-  Shared chart chrome. Series palette is the validated light-mode set against
-  the #fcfcfb card surface (worst adjacent CVD ΔE 16.2). Fixed order — never
-  cycled. Aqua/yellow are sub-3:1 on this surface, so every chart pairs with
-  a legend and the page keeps a table view of the same data.
+  Shared chart chrome. Colors are CSS-variable references, so both validated
+  palettes (light on #fcfcfb, dark on #171a20 — see globals.css) swap with the
+  theme with zero JS. Recharts passes these straight into SVG props, where
+  var() resolves natively. Fixed order — never cycled. Sub-3:1 hues mean every
+  chart pairs with a legend and the page keeps a table view of the same data.
 */
 export const VIZ = {
-  blue: "#2a78d6",
-  aqua: "#1baf7a",
-  yellow: "#eda100",
-  violet: "#4a3aa7",
-  red: "#e34948",
-  orange: "#eb6834",
+  blue: "var(--viz-1)",
+  aqua: "var(--viz-2)",
+  yellow: "var(--viz-3)",
+  violet: "var(--viz-4)",
+  red: "var(--viz-5)",
+  orange: "var(--viz-6)",
 } as const;
 
-export const SURFACE = "#fcfcfb";
-export const GRID = "#e6e5df";
-export const AXIS = "#c9c8c0";
-export const MUTED = "#7c8394";
-export const INK = "#14181f";
-export const INK_SECONDARY = "#4c5462";
+export const SURFACE = "var(--surface)";
+export const GRID = "var(--grid)";
+export const AXIS = "var(--axis)";
+export const MUTED = "var(--muted)";
+export const INK = "var(--ink)";
+export const INK_SECONDARY = "var(--ink-secondary)";
 
 export const gridProps = { stroke: GRID, strokeWidth: 1, vertical: false } as const;
 export const axisTick = { fill: MUTED, fontSize: 11 } as const;
@@ -46,11 +47,11 @@ export function ChartTooltip({ active, payload, label, format }: TooltipContentP
   return (
     <div
       style={{
-        background: "#ffffff",
-        border: "1px solid rgba(16,24,40,0.14)",
+        background: "var(--surface)",
+        border: "1px solid var(--border-strong)",
         borderRadius: 8,
         padding: "9px 11px",
-        boxShadow: "0 6px 20px rgba(16,24,40,0.12)",
+        boxShadow: "var(--tooltip-shadow)",
       }}
     >
       {label !== undefined && <p style={{ color: MUTED, fontSize: 11, marginBottom: 5 }}>{String(label)}</p>}

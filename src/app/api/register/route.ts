@@ -21,8 +21,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "An account with that email already exists." }, { status: 409 });
   }
 
+  // New signups are read-only until an admin promotes them; the schema's
+  // ADMIN default exists only to backfill pre-RBAC rows.
   await prisma.user.create({
-    data: { email, name: name || null, password: await bcrypt.hash(password, 10) },
+    data: { email, name: name || null, role: "VIEWER", password: await bcrypt.hash(password, 10) },
   });
   return NextResponse.json({ ok: true }, { status: 201 });
 }
