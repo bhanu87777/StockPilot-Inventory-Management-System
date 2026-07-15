@@ -230,15 +230,30 @@ async function geminiPlan(products: ProductRow[], inbound: Map<string, number>):
     required: ["summary", "suggestions"],
   };
 
+  // The "flash-latest" alias now resolves to a thinking model (gemini-3.5-flash)
+  // that spends its output budget reasoning before emitting text — on a
+  // non-streaming call that both delays the response and can return empty
+  // content. thinkingBudget:0 disables that so we get the JSON directly and fast.
+  // The AbortController caps the wait: a slow or unreachable API aborts here and
+  // falls back to the heuristic planner in seconds, instead of hanging until
+  // undici's 5-minute headers timeout.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45_000);
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        signal: controller.signal,
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: advisorPrompt(products, inbound) }] }],
-          generationConfig: { responseMimeType: "application/json", responseSchema, maxOutputTokens: 8192 },
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema,
+            maxOutputTokens: 8192,
+            thinkingConfig: { thinkingBudget: 0 },
+          },
         }),
       },
     );
@@ -258,6 +273,8 @@ async function geminiPlan(products: ProductRow[], inbound: Map<string, number>):
   } catch (err) {
     console.error("Gemini advisor failed, using fallback:", err);
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
