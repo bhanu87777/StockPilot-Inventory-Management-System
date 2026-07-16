@@ -9,6 +9,19 @@ const MODEL = process.env.ADVISOR_MODEL || "claude-sonnet-5";
 // Studio). "gemini-flash-latest" always points at the current free flash model.
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 
+// Free-tier daily quotas are counted PER MODEL, so each entry below is a
+// separate quota bucket. When the preferred model is exhausted (429) or
+// unavailable (404/503), geminiPlan retries the same request on the next one
+// before falling through to the heuristic planner.
+const GEMINI_MODELS = [
+  ...new Set([
+    GEMINI_MODEL,
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash-lite",
+  ]),
+];
+
 type Urgency = "CRITICAL" | "SOON" | "OK" | "DEAD";
 
 export interface Suggestion {
@@ -240,27 +253,35 @@ async function geminiPlan(products: ProductRow[], inbound: Map<string, number>):
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 45_000);
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: advisorPrompt(products, inbound) }] }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema,
-            maxOutputTokens: 8192,
-            thinkingConfig: { thinkingBudget: 0 },
-          },
-        }),
-      },
-    );
-    if (!res.ok) {
-      console.error("Gemini advisor failed:", res.status, await res.text());
-      return null;
+    // Quota errors are per model — walk the fallback chain (within the single
+    // 45s budget) before giving up to the heuristic.
+    let res: Response | null = null;
+    for (const candidate of GEMINI_MODELS) {
+      const attempt = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: advisorPrompt(products, inbound) }] }],
+            generationConfig: {
+              responseMimeType: "application/json",
+              responseSchema,
+              maxOutputTokens: 8192,
+              thinkingConfig: { thinkingBudget: 0 },
+            },
+          }),
+        },
+      );
+      if (attempt.ok) {
+        res = attempt;
+        break;
+      }
+      console.error(`Gemini advisor failed (${candidate}):`, attempt.status, await attempt.text());
+      if (![429, 404, 503].includes(attempt.status)) return null;
     }
+    if (!res) return null;
     const data = await res.json();
     const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) return null;
